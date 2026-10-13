@@ -1,20 +1,12 @@
 #!/bin/sh
 
-# ========================================================
-# Script Soal 10 di jichi
-# Autostart DHCP Relay setelah restart
-# ========================================================
+update-rc.d isc-dhcp-relay defaults 2>/dev/null
 
-# Menambahkan ke rc.local atau update-rc.d
-systemctl enable isc-dhcp-relay 2>/dev/null || update-rc.d isc-dhcp-relay defaults 2>/dev/null
-
-# Memastikan /root/init.sh & /root/dhcp_relay.sh dijalankan saat boot
 cat <<'EOF' > /etc/rc.local
 #!/bin/sh -e
 sh /root/init.sh
-service isc-dhcp-relay start
+service isc-dhcp-relay start 2>/dev/null
+dhcrelay -4 -i eth2 -i eth3 -i eth4 10.64.4.10 2>/dev/null
 exit 0
 EOF
 chmod +x /etc/rc.local
-
-echo "Autostart DHCP Relay pada jichi telah dikonfigurasi."

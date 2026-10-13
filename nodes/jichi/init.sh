@@ -25,12 +25,11 @@ iface eth4 inet static
     netmask 255.255.255.0
 EOF
 
-# Nameserver default
 cat <<EOF > /etc/resolv.conf
 nameserver 192.168.122.1
 EOF
 
-# IPv4 forwarding & NAT Masquerade
+# Quest 1
 sysctl -w net.ipv4.ip_forward=1
 iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
 

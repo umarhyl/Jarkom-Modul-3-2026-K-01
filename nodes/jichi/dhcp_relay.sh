@@ -1,9 +1,6 @@
 #!/bin/sh
 
-# Soal 3 & 10: Konfigurasi DHCP Relay pada router jichi
-# Melayani permintaan DHCP dari Network 2 (eth2) dan Network 3 (eth3)
-# menuju DHCP Server tengen (10.64.4.10) via eth4
-
+# Quest 3
 apt-get update
 apt-get install -y isc-dhcp-relay
 
@@ -14,4 +11,5 @@ OPTIONS=""
 EOF
 
 service isc-dhcp-relay restart
-service isc-dhcp-relay status
+pkill dhcrelay 2>/dev/null || true
+dhcrelay -4 -i eth2 -i eth3 -i eth4 10.64.4.10 2>/dev/null || true

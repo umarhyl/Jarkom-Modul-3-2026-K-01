@@ -1,8 +1,6 @@
 #!/bin/sh
 
-# ==========================================
-# Quest 2: Instalasi & Interface DHCP Server
-# ==========================================
+# Quest 2
 apt-get update
 apt-get install -y isc-dhcp-server
 

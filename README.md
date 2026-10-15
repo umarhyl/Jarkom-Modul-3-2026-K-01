@@ -433,13 +433,16 @@ tambahan.
 ![service status after restart](assets/service-status-after-restart.gif)
 
 ### 11. Konfigurasi DNS Server Master-Slave (Zone Transfer & Replikasi)
-Membangun infrastruktur DNS Server redundan menggunakan arsitektur Master-Slave pada domain `jujutsu.k01.com`.
 
+Membangun infrastruktur DNS Server redundan menggunakan arsitektur Master-Slave pada domain `jujutsu.k01.com`.
 * Node **`utahime`** (`10.64.1.2`) bertindak sebagai **Master DNS Server**, mengelola berkas zona otoritatif dan mengizinkan transfer zona hanya ke IP node **`shoko`** (`10.64.1.3`).
 * Node **`shoko`** (`10.64.1.3`) bertindak sebagai **Slave DNS Server**, menerima replikasi berkas zona dan menyimpannya secara lokal di `/var/cache/bind/db.jujutsu`.
+* Node **`fushiguro`** bertindak sebagai **Node Pengujian** yang memverifikasi kedua DNS server meresolusi domain utama dan record sinkronisasi dengan benar.
 
 #### Konfigurasi Script
+
 * **Node `utahime` (`nodes/utahime/quest-11.sh`):**
+
 ```bash
 #!/bin/bash
 
@@ -497,6 +500,7 @@ service named restart || /etc/init.d/named restart || named
 ```
 
 * **Node `shoko` (`nodes/shoko/quest-11.sh`):**
+
 ```bash
 #!/bin/bash
 
@@ -529,7 +533,8 @@ named-checkconf
 service named restart || /etc/init.d/named restart || named
 ```
 
-* **Node Pengujian: `fushiguro` & `itadori` (`quest-11.sh`):**
+* **Node Pengujian: `fushiguro` (`nodes/fushiguro/quest-11.sh`):**
+
 ```bash
 #!/bin/sh
 dig @10.64.1.2 jujutsu.k01.com
@@ -539,48 +544,27 @@ dig @10.64.1.3 test-sync.jujutsu.k01.com
 ```
 
 #### Pengujian dan Bukti Screenshot
-Pengujian dilakukan dengan memverifikasi konfigurasi BIND9 pada master dan slave, memeriksa keberadaan file cache replikasi pada slave, serta menjalankan perintah `dig` dari client:
 
-* **Validasi Konfigurasi Master utahime:**
-```bash
-root@utahime:~# named-checkzone jujutsu.k01.com /etc/bind/db.jujutsu
-zone jujutsu.k01.com/IN: loaded serial 2026101501
-OK
-```
-![Status BIND Master Utahime](assets/soal11-master-check.png)
+Pengujian hanya diambil langsung dari node pengujian **`fushiguro`** dengan menjalankan `quest-11.sh`:
 
-* **Verifikasi File Zona Replikasi di Slave shoko:**
-```bash
-root@shoko:~# ls -la /var/cache/bind/
-total 12
-drwxrwxr-x 2 bind bind 4096 Oct 15 20:03 .
-drwxr-xr-x 8 root root 4096 Oct 15 20:00 ..
--rw-r--r-- 1 bind bind  589 Oct 15 20:03 db.jujutsu
-```
-![Bukti Sinkronisasi Shoko](assets/soal11-slave-sync.png)
+* **Uji Resolusi DNS Otoritatif Master & Slave dari Klien `fushiguro`:**
+  
+  ![Pengujian DNS Master Slave](assets/quest11-dig-test.png)
 
-* **Uji Resolusi DNS dari Client fushiguro dan itadori:**
-```bash
-fushiguro:~# ./quest-11.sh
-;; ANSWER SECTION:
-jujutsu.k01.com.	604800	IN	A	10.64.1.4
-
-;; ANSWER SECTION:
-test-sync.jujutsu.k01.com. 604800 IN	A	10.64.1.99
-```
-![Hasil Dig Fushiguro](assets/soal11-test-fushiguro.png)
-![Hasil Dig Itadori](assets/soal11-test-itadori.png)
 
 ---
 
 ### 12. Reverse DNS (PTR Record), Alias CNAME, dan DNS Forwarding
-Menyempurnakan kapabilitas DNS server `jujutsu.k01.com` dengan:
+
+Menyempurnakan konfigurasi DNS Server `jujutsu.k01.com` dengan:
 1. Menambahkan record alias `www.jujutsu.k01.com` (`CNAME`) yang merujuk ke domain kanonikal `jujutsu.k01.com.`.
-2. Mengonfigurasi **Reverse DNS Zone** (`1.64.10.in-addr.arpa`) untuk memetakan IP gateway/proxy `10.64.1.4` kembali ke hostname domainnya (`PTR jujutsu.k01.com.`).
+2. Mengonfigurasi **Reverse DNS Zone** (`1.64.10.in-addr.arpa`) untuk memetakan IP reverse proxy `10.64.1.4` kembali ke hostname domainnya (`PTR jujutsu.k01.com.`).
 3. Mengonfigurasi forwarder DNS upstream ke IP gateway NAT `192.168.122.1` sehingga client internal dapat meresolusi domain publik internet.
 
 #### Konfigurasi Script
+
 * **Node `utahime` (`nodes/utahime/quest-12.sh`):**
+
 ```bash
 #!/bin/bash
 
@@ -660,6 +644,7 @@ rndc reload || service named restart || /etc/init.d/named restart || named
 ```
 
 * **Node `shoko` (`nodes/shoko/quest-12.sh`):**
+
 ```bash
 #!/bin/bash
 
@@ -694,7 +679,8 @@ named-checkconf
 rndc reload || service named restart || /etc/init.d/named restart || named
 ```
 
-* **Node Pengujian: `fushiguro` & `itadori` (`quest-12.sh`):**
+* **Node Pengujian: `fushiguro` (`nodes/fushiguro/quest-12.sh`):**
+
 ```bash
 #!/bin/sh
 dig @10.64.1.2 jujutsu.k01.com
@@ -706,45 +692,26 @@ ping -c 4 google.com
 ```
 
 #### Pengujian dan Bukti Screenshot
-* **Pemeriksaan Reverse Zone pada Master:**
-```bash
-root@utahime:~# named-checkzone 1.64.10.in-addr.arpa /etc/bind/db.10.64.1
-zone 1.64.10.in-addr.arpa/IN: loaded serial 2026101502
-OK
-```
-![Validasi Reverse Zone Utahime](assets/soal12-zone-check.png)
 
-* **Hasil Resolusi PTR dan CNAME pada Klien:**
-```bash
-fushiguro:~# dig @10.64.1.2 www.jujutsu.k01.com +short
-jujutsu.k01.com.
-10.64.1.4
+Pengujian seluruh fungsionalitas (resolusi record A, record alias CNAME, PTR reverse pointer, dan forwarding internet) diambil langsung dari satu layar eksekusi node pengujian **`fushiguro`**:
 
-fushiguro:~# dig @10.64.1.2 -x 10.64.1.4 +short
-jujutsu.k01.com.
-```
-![Hasil Dig CNAME dan PTR](assets/soal12-dig-cname-ptr.png)
+* **Eksekusi Pengujian Terpadu pada Node `fushiguro`:**
+  
+  ![Pengujian Reverse DNS, CNAME, dan Ping](assets/quest12-reverse-cname.png)
 
-* **Uji Forwarding Internet dari Klien:**
-```bash
-fushiguro:~# ping -c 4 google.com
-PING google.com (142.250.190.46): 56 data bytes
-64 bytes from 142.250.190.46: seq=0 ttl=114 time=23.4 ms
-64 bytes from 142.250.190.46: seq=1 ttl=114 time=22.8 ms
---- google.com ping statistics ---
-4 packets transmitted, 4 packets received, 0% packet loss
-```
-![Ping Google Forwarder](assets/soal12-ping-google.png)
 
 ---
 
 ### 13. MariaDB Master-Slave Database Replication dan Remote Access
-Membangun kluster basis data relasional MariaDB dengan arsitektur Master-Slave:
-* **Master (`yaga` - `10.64.4.11`)**: `server-id = 1`, mengaktifkan binary logging (`mariadb-bin.log`), mereplikasi hanya database `db_shibuya_k01`, membuat tabel `request_logs`, serta memberikan hak replikasi ke user `replica` dan hak akses remote bagi seluruh node di segmen `10.64.4.%`.
-* **Slave (`inumaki`)**: `server-id = 2`, membaca status posisi binary log Master secara dinamis via query `SHOW MASTER STATUS\G`, lalu menyalakan *replication thread* (`START SLAVE`).
+
+Membangun arsitektur kluster database MariaDB dengan skema Master-Slave:
+* **Master (`yaga` - `10.64.4.11`)**: Mengaktifkan binary logging (`mariadb-bin.log`), mereplikasi hanya database `db_shibuya_k01`, membuat tabel `request_logs`, serta memberikan hak replikasi kepada user `replica` dan grant remote access untuk subnet `10.64.4.%`.
+* **Slave (`inumaki` - `10.64.4.12`)**: Mengambil posisi file log Master secara otomatis dan mengaktifkan thread replikasi slave.
 
 #### Konfigurasi Script
+
 * **Node `yaga` (`nodes/yaga/quest-13.sh`):**
+
 ```bash
 #!/bin/bash
 set -e
@@ -795,6 +762,7 @@ mariadb -u root -e "SHOW MASTER STATUS\G"
 ```
 
 * **Node `inumaki` (`nodes/inumaki/quest-13.sh`):**
+
 ```bash
 #!/bin/bash
 set -e
@@ -834,36 +802,27 @@ mariadb -u root -e "SHOW SLAVE STATUS\G" | grep -E "Slave_IO_Running|Slave_SQL_R
 ```
 
 #### Pengujian dan Bukti Screenshot
-* **Pemeriksaan Status Binary Log Master Yaga:**
-```text
-*************************** 1. row ***************************
-            File: mariadb-bin.000001
-        Position: 685
-    Binlog_Do_DB: db_shibuya_k01
-Binlog_Ignore_DB: 
-```
-![Status Master Yaga](assets/soal13-master-status.png)
 
-* **Pemeriksaan Status Replikasi Slave Inumaki:**
-```text
-=== Inumaki DB Slave Status ===
-             Slave_IO_Running: Yes
-            Slave_SQL_Running: Yes
-        Seconds_Behind_Master: 0
-                Last_IO_Error: 
-               Last_SQL_Error: 
-```
-![Status Replikasi Inumaki](assets/soal13-slave-status.png)
+Karena nomor ini merupakan inisialisasi basis data dan replikasi antar-server (tanpa node klien eksternal), pengujian diverifikasi dari output status slave di node **`inumaki`**:
+
+* **Verifikasi Status Replikasi Slave pada Node `inumaki`:**
+  
+  ![Status Slave Inumaki](assets/quest13-slave-status.png)
+
+
 
 ---
 
 ### 14. Konfigurasi Worker Node (Frontend PHP dan API Logger)
+
 Menyiapkan kluster worker aplikasi web:
-* **Frontend Web Worker (`maki`, `panda`)**: Mengonfigurasi Nginx dan PHP-FPM untuk menampilkan nama host worker, dan membatasi akses (`allow 10.64.1.4; deny all;`) agar hanya dapat diakses melalui reverse proxy `gojo` atau localhost.
-* **Backend API Worker (`nanami`, `todo`)**: Mengonfigurasi endpoint `/` dan `/api` untuk mencatat request log ke server database `yaga` (`10.64.4.11`), dan membatasi akses (`allow 10.64.4.2; deny all;`) agar hanya dapat diakses melalui load balancer `geto` atau localhost.
+* **Frontend Web Worker (`maki`, `panda`)**: Menjalankan Nginx + PHP-FPM, menampilkan nama worker, dan membatasi akses (`allow 10.64.1.4; deny all;`) agar hanya dapat diakses melalui reverse proxy `gojo` atau localhost.
+* **Backend API Worker (`nanami`, `todo`)**: Menjalankan endpoint `/` dan `/api` untuk mencatat request log ke server database `yaga` (`10.64.4.11`), dan membatasi akses (`allow 10.64.4.2; deny all;`) agar hanya dapat diakses melalui load balancer `geto` atau localhost.
 
 #### Konfigurasi Script
+
 * **Node `panda` & `maki` (`nodes/panda/quest-14.sh`):**
+
 ```bash
 #!/bin/bash
 set -e
@@ -909,6 +868,7 @@ echo "Setup Web Worker Selesai!"
 ```
 
 * **Node `todo` & `nanami` (`nodes/todo/quest-14.sh`):**
+
 ```bash
 #!/bin/bash
 set -e
@@ -991,37 +951,29 @@ echo "Setup API Worker Selesai!"
 ```
 
 #### Pengujian dan Bukti Screenshot
-* **Verifikasi Layanan PHP-FPM dan Nginx:**
-```bash
-panda:~# service nginx status && service php8.4-fpm status
-* nginx is running
-* php-fpm8.4 is running
-```
-![Status Worker Frontend](assets/soal14-service-worker.png)
 
-* **Verifikasi Access Control List (ACL):**
-```bash
-# Akses lokal berhasil
-todo:~# curl -s http://localhost/ | grep status
-{"status":"success","worker_name":"todo"...}
+Pengujian proteksi ACL diuji langsung dari node pengujian **`fushiguro`** dengan mengakses worker secara direct (tanpa lewat proxy yang diizinkan):
 
-# Akses dari IP tidak terdaftar ditolak
-fushiguro:~# curl -I http://10.64.4.6/
-HTTP/1.1 403 Forbidden
-```
-![Uji ACL Worker Nginx](assets/soal14-acl-test.png)
+* **Uji Akses Langsung (Direct Access Denied) dari Klien `fushiguro`:**
+  
+  ![Uji Akses Terlarang Direct Worker](assets/quest14-worker-direct.png)
+
+
 
 ---
 
 ### 15. Nginx Load Balancer dengan Weighted Round Robin
-Mengonfigurasi node **`geto`** (`10.64.4.2`) sebagai Load Balancer untuk mendistribusikan lalu lintas ke cluster API worker dengan bobot:
+
+Node **`geto`** (`10.64.4.2`) dikonfigurasi sebagai Load Balancer untuk mendistribusikan lalu lintas ke cluster API worker dengan bobot:
 * `nanami` (`10.64.4.5`) dengan `weight=3`
 * `todo` (`10.64.4.6`) dengan `weight=1`
 
-Pengujian dari client `fushiguro` mengirimkan 8 request berturut-turut untuk membuktikan rasio pembagian beban $3:1$.
+Pengujian beban dijalankan dari node pengujian **`fushiguro`** menggunakan skrip `Test-Soal-15.sh`.
 
 #### Konfigurasi Script
+
 * **Node `geto` (`nodes/geto/Soal-15.sh`):**
+
 ```bash
 #!/bin/bash
 
@@ -1050,7 +1002,8 @@ service nginx restart
 echo "Konfigurasi Load Balancer Geto Selesai!"
 ```
 
-* **Node Pengujian `fushiguro` (`Test-Soal-15.sh`):**
+* **Node Pengujian: `fushiguro` (`nodes/fushiguro/Test-Soal-15.sh`):**
+
 ```bash
 #!/bin/sh
 
@@ -1060,33 +1013,29 @@ done
 ```
 
 #### Pengujian dan Bukti Screenshot
-* **Verifikasi Konfigurasi Upstream pada Geto:**
-![Konfigurasi Nginx Geto](assets/soal15-config-geto.png)
 
-* **Hasil Eksekusi 8 Request dari Client:**
-```text
-fushiguro:~# ./Test-Soal-15.sh
-{"status":"success","worker_name":"nanami",...}
-{"status":"success","worker_name":"nanami",...}
-{"status":"success","worker_name":"nanami",...}
-{"status":"success","worker_name":"todo",...}
-{"status":"success","worker_name":"nanami",...}
-{"status":"success","worker_name":"nanami",...}
-{"status":"success","worker_name":"nanami",...}
-{"status":"success","worker_name":"todo",...}
-```
-Hasil eksekusi membuktikan bahwa dari 8 request, 6 request dilayani oleh `nanami` dan 2 request dilayani oleh `todo` (rasio $3:1$).
-![Uji Weighted Round Robin](assets/soal15-weighted-test.png)
+Pengujian verifikasi pembagian beban berbobot 3:1 diambil langsung dari eksekusi di node pengujian **`fushiguro`**:
+
+* **Hasil Eksekusi 8 Request dari Klien `fushiguro`:**
+  
+  ![Hasil Eksekusi Uji WRR 3:1](assets/quest15-wrr-test.png)
+
+
 
 ---
 
 ### 16. Path-Based Routing dan Reverse Proxy Load Balancer
-Node **`gojo`** (`10.64.1.4`) dikonfigurasi sebagai **Public Gateway Reverse Proxy** dengan aturan perutean berbasis path URL (*Path-Based Routing*):
+
+Node **`gojo`** (`10.64.1.4`) dikonfigurasi sebagai **Public Gateway Reverse Proxy** dengan aturan perutean berbasis path URL:
 1. Request ke root path (`/`) didistribusikan ke cluster web frontend (`maki` dan `panda`).
 2. Request ke path `/api` dialihkan secara transparan ke Load Balancer API internal `geto` (`10.64.4.2/`).
 
+Pengujian dijalankan dari node pengujian **`fushiguro`** menggunakan skrip `Test-Soal-16-18.sh`.
+
 #### Konfigurasi Script
+
 * **Node `gojo` (`nodes/gojo/Soal-16.sh`):**
+
 ```bash
 #!/bin/bash
 
@@ -1122,36 +1071,37 @@ service nginx restart
 echo "Setup Path-Based Routing di Gojo Selesai!"
 ```
 
-* **Node Pengujian `fushiguro` (`Test-Soal-16-18.sh`):**
+* **Node Pengujian: `fushiguro` (`nodes/fushiguro/Test-Soal-16-18.sh`):**
+
 ```bash
 #!/bin/sh
 
 curl -H "Host: jujutsu.k01.com" http://10.64.1.4/
 curl -H "Host: jujutsu.k01.com" http://10.64.1.4/
+
+# Soal 16-17
 curl -H "Host: jujutsu.k01.com" http://10.64.1.4/api
 ```
 
 #### Pengujian dan Bukti Screenshot
-* **Pemeriksaan Respon Root Path (`/`) dan API Path (`/api`):**
-```bash
-fushiguro:~# curl -H "Host: jujutsu.k01.com" http://10.64.1.4/
-Response dari Frontend Worker: maki
 
-fushiguro:~# curl -H "Host: jujutsu.k01.com" http://10.64.1.4/
-Response dari Frontend Worker: panda
+Pengujian routing root dan endpoint API diambil langsung dari node pengujian **`fushiguro`**:
 
-fushiguro:~# curl -H "Host: jujutsu.k01.com" http://10.64.1.4/api
-{"status":"success","message":"Log berhasil dicatat di database Yaga",...}
-```
-![Uji Path-Based Routing](assets/soal16-path-routing.png)
+* **Hasil Pengujian Path-Based Routing dari Klien `fushiguro`:**
+  
+  ![Pengujian Path Based Routing](assets/quest16-path-routing.png)
+
 
 ---
 
 ### 17. Request Auditing dan Client Real-IP Tracking ke Database
-Memastikan data audit lalu lintas mencatat alamat IP asli client (`fushiguro` / `itadori`) saat melewati arsitektur proxy bertingkat (`Client` $\rightarrow$ `Gojo` $\rightarrow$ `Geto` $\rightarrow$ `Worker API`), bukan alamat IP reverse proxy internal.
+
+Memastikan data audit lalu lintas mencatat alamat IP asli client saat melewati arsitektur proxy bertingkat (`Client` $\rightarrow$ `Gojo` $\rightarrow$ `Geto` $\rightarrow$ `Worker API`).
 
 #### Konfigurasi Script
+
 * **Node API Worker: `nanami`, `todo`, & `kirara` (`Soal-17.sh`):**
+
 ```bash
 cat << 'EOF' > /var/www/html/index.php
 <?php
@@ -1191,49 +1141,35 @@ $conn->close();
 EOF
 ```
 
-#### Pengujian dan Bukti Screenshot
-* **Verifikasi Header JSON dari Client:**
+* **Node Pengujian: `fushiguro` (`nodes/fushiguro/Test-Soal-16-18.sh`):**
+
 ```bash
-fushiguro:~# curl -s -H "Host: jujutsu.k01.com" http://10.64.1.4/api
-{
-  "status": "success",
-  "message": "Log dicatat di DB oleh nanami",
-  "recorded_ip": "10.64.2.11"
-}
+curl -H "Host: jujutsu.k01.com" http://10.64.1.4/api
 ```
-![Hasil Log IP Asli Klien](assets/soal17-realip-client.png)
 
-* **Verifikasi Data Tabel pada Database Master Yaga dan Replikasi Slave Inumaki:**
-```sql
-root@yaga:~# mariadb -u root -e "SELECT id, worker_name, client_ip, pesan, created_at FROM db_shibuya_k01.request_logs ORDER BY id DESC LIMIT 3;"
-+----+-------------+-------------+----------------------------------------------+---------------------+
-| id | worker_name | client_ip   | pesan                                        | created_at          |
-+----+-------------+-------------+----------------------------------------------+---------------------+
-| 14 | nanami      | 10.64.2.11  | Request API diproses oleh: nanami            | 2026-10-15 20:22:10 |
-| 13 | todo        | 10.64.2.10  | Request API diproses oleh: todo              | 2026-10-15 20:21:55 |
-+----+-------------+-------------+----------------------------------------------+---------------------+
+#### Pengujian dan Bukti Screenshot
 
-root@inumaki:~# mariadb -u root -e "SELECT id, client_ip, pesan FROM db_shibuya_k01.request_logs ORDER BY id DESC LIMIT 2;"
-+----+-------------+----------------------------------------------+
-| id | client_ip   | pesan                                        |
-+----+-------------+----------------------------------------------+
-| 14 | 10.64.2.11  | Request API diproses oleh: nanami            |
-| 13 | 10.64.2.10  | Request API diproses oleh: todo              |
-+----+-------------+----------------------------------------------+
-```
-![Verifikasi Data Master Yaga](assets/soal17-db-yaga.png)
-![Verifikasi Data Slave Inumaki](assets/soal17-db-inumaki.png)
+Pengujian respon audit IP klien asli diambil langsung dari node pengujian **`fushiguro`**:
+
+* **Hasil Respon JSON dengan Recorded IP dari Klien `fushiguro`:**
+  
+  ![Verifikasi Respon Recorded IP Klien](assets/quest17-client-ip.png)
+
+
 
 ---
 
 ### 18. High Availability (Passive Health Check, Failover Backup, dan Real-IP Multi-Hop)
-Mengimplementasikan redundansi tinggi pada Load Balancer `geto`:
-1. **Passive Health Check**: Mengonfigurasi parameter `max_fails=2 fail_timeout=5s` pada worker utama (`nanami` dan `todo`).
-2. **Failover Backup Worker**: Node **`kirara`** (`10.64.4.7`) bertindak sebagai server cadangan (`backup`) yang hanya melayani request saat seluruh worker utama mati.
-3. **Modul Real-IP Multi-Hop**: Mengaktifkan modul Nginx `ngx_http_realip_module` (`set_real_ip_from 10.64.1.4; real_ip_header X-Forwarded-For;`) untuk mempertahankan alamat IP klien asli.
+
+Mengimplementasikan ketersediaan tinggi pada Load Balancer `geto`:
+1. **Passive Health Check**: Parameter `max_fails=2 fail_timeout=5s` pada worker utama (`nanami` dan `todo`).
+2. **Failover Backup Worker**: Node **`kirara`** (`10.64.4.7`) bertindak sebagai worker cadangan (`backup`) yang hanya melayani request saat seluruh worker utama mati.
+3. **Modul Real-IP Multi-Hop**: Modul `ngx_http_realip_module` (`set_real_ip_from 10.64.1.4; real_ip_header X-Forwarded-For;`) untuk meneruskan IP klien asli secara transparan.
 
 #### Konfigurasi Script
+
 * **Node `geto` (`nodes/geto/Soal-18.sh`):**
+
 ```bash
 cat << 'EOF' > /etc/nginx/sites-available/default
 upstream api_cluster {
@@ -1260,33 +1196,35 @@ EOF
 service nginx restart
 ```
 
-#### Pengujian dan Bukti Screenshot
-* **Simulasi Failover (Mematikan Worker Utama):**
+* **Node Pengujian: `fushiguro` (`nodes/fushiguro/Test-Soal-16-18.sh`):**
+
 ```bash
-nanami:~# service nginx stop
-todo:~# service nginx stop
+curl -H "Host: jujutsu.k01.com" http://10.64.1.4/api
 ```
 
-* **Hasil Pengujian Otomatis Beralih ke Kirara:**
-```bash
-fushiguro:~# curl -s -H "Host: jujutsu.k01.com" http://10.64.1.4/api
-{
-  "status": "success",
-  "message": "Log dicatat di DB oleh kirara",
-  "recorded_ip": "10.64.2.11"
-}
-```
-![Simulasi Failover Backup Kirara](assets/soal18-failover-kirara.png)
+#### Pengujian dan Bukti Screenshot
+
+Setelah mematikan service Nginx pada worker utama (`nanami` dan `todo`), pengujian pembuktian *failover* otomatis ke `kirara` diambil langsung dari node pengujian **`fushiguro`**:
+
+* **Hasil Pengujian Failover ke Worker Cadangan dari Klien `fushiguro`:**
+  
+  ![Failover ke Kirara dari Fushiguro](assets/quest18-failover-kirara.png)
+
 
 ---
 
 ### 19. Edge Caching (Proxy Cache) dan Rate Limiting Traffic Protection
+
 Menerapkan optimasi performa dan mitigasi lonjakan trafik pada Edge Reverse Proxy **`gojo`** (`10.64.1.4`):
 1. **Edge Proxy Caching**: Mengaktifkan direktori cache memori `web_cache` dengan masa aktif 10 menit untuk respon kode status `200` dan `302`, serta menyertakan header status `X-Cache-Status`.
 2. **API Rate Limiting**: Membatasi laju request pada `/api` maksimal 10 request per detik (`rate=10r/s`) menggunakan zona memori `api_limit`. Request yang melampaui batas akan langsung ditolak dengan kode status HTTP `503`.
 
+Pengujian dijalankan dari node pengujian **`fushiguro`** menggunakan skrip `Test-Soal-19.sh`.
+
 #### Konfigurasi Script
+
 * **Node `gojo` (`nodes/gojo/Soal-19.sh`):**
+
 ```bash
 #!/bin/bash
 
@@ -1333,45 +1271,25 @@ service nginx restart
 echo "Konfigurasi Caching dan Rate Limiting di Gojo Selesai!"
 ```
 
-* **Node Pengujian `fushiguro` (`Test-Soal-19.sh`):**
+* **Node Pengujian: `fushiguro` (`nodes/fushiguro/Test-Soal-19.sh`):**
+
 ```bash
 #!/bin/sh
 
-# Verifikasi Caching (Request 1 = MISS, Request 2 = HIT)
+# 1. Verifikasi Caching (Request 1 = MISS, Request 2 = HIT)
 curl -I -H "Host: jujutsu.k01.com" http://10.64.1.4/
 curl -I -H "Host: jujutsu.k01.com" http://10.64.1.4/
 
-# Verifikasi Rate Limiting: 20 request berurutan cepat
+# 2. Verifikasi Rate Limiting: 20 request berurutan cepat
 for i in {1..20}; do 
     curl -s -o /dev/null -w "Request $i - HTTP Status: %{http_code}\n" -H "Host: jujutsu.k01.com" http://10.64.1.4/api
 done
 ```
 
 #### Pengujian dan Bukti Screenshot
-* **Verifikasi Proxy Caching (MISS lalu HIT):**
-```bash
-fushiguro:~# curl -I -H "Host: jujutsu.k01.com" http://10.64.1.4/
-HTTP/1.1 200 OK
-...
-X-Cache-Status: MISS
 
-fushiguro:~# curl -I -H "Host: jujutsu.k01.com" http://10.64.1.4/
-HTTP/1.1 200 OK
-...
-X-Cache-Status: HIT
-```
-![Uji Proxy Cache Status HIT](assets/soal19-cache-status.png)
+Pengujian cache header (`MISS` $\rightarrow$ `HIT`) serta rate limiting diambil langsung dari satu layar eksekusi node pengujian **`fushiguro`**:
 
-* **Verifikasi Rate Limiting (Mendeteksi HTTP 503):**
-```bash
-fushiguro:~# ./Test-Soal-19.sh
-Request 1 - HTTP Status: 200
-Request 2 - HTTP Status: 200
-Request 3 - HTTP Status: 200
-Request 4 - HTTP Status: 503
-Request 5 - HTTP Status: 503
-Request 6 - HTTP Status: 503
-...
-Request 20 - HTTP Status: 503
-```
-![Uji Proteksi Rate Limiting 503](assets/soal19-ratelimit-test.png)
+* **Hasil Eksekusi Caching dan Rate Limiting dari Klien `fushiguro`:**
+  
+  ![Pengujian Caching dan Rate Limiting](assets/quest19-cache-rate-limit.png)

@@ -1,32 +1,33 @@
 #!/bin/bash
+set -e
 
-# 1. Buka blokir service
+# 1. Buka blokir service Debian
 printf '#!/bin/sh\nexit 0\n' > /usr/sbin/policy-rc.d
 
-# 2. Update dan Install Nginx + PHP-FPM
+# 2. Install Nginx + PHP-FPM
 apt-get update
 apt-get install -y nginx php-fpm
 
-# 3. Buat file index.php yang menampilkan hostname
-rm /var/www/html/index.html 2>/dev/null
+# 3. File index.php menampilkan hostname
+rm -f /var/www/html/index.html
 cat << 'EOF' > /var/www/html/index.php
 <?php
-echo "Ini adalah node: " . gethostname() . "\n";
+echo "Response dari Frontend Worker: " . gethostname() . "\n";
 ?>
 EOF
 
-# 4. Konfigurasi Virtual Host dan Pembatasan Akses
+# 4. Konfigurasi Nginx (Hanya izinkan Gojo 10.64.1.4 dan localhost)
 cat << 'EOF' > /etc/nginx/sites-available/default
 server {
-    listen 80;
-    server_name web.shibuya.com;
+    listen 80 default_server;
+    server_name jujutsu.k01.com www.jujutsu.k01.com web.shibuya.com _;
 
-    # Hanya menerima trafik melalui jalur proxy web yang ditentukan (Gojo)
     allow 10.64.1.4;
+    allow 127.0.0.1;
     deny all;
 
     root /var/www/html;
-    index index.php index.html index.htm;
+    index index.php index.html;
 
     location / {
         try_files $uri $uri/ =404;
@@ -39,8 +40,6 @@ server {
 }
 EOF
 
-# 5. Restart Service
 service php*-fpm restart
 service nginx restart
-
 echo "Setup Web Worker Selesai!"

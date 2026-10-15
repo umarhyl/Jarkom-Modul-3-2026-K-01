@@ -431,3 +431,947 @@ tambahan.
 - verifikasi status service setelah restart:
 
 ![service status after restart](assets/service-status-after-restart.gif)
+
+### 11. Konfigurasi DNS Server Master-Slave (Zone Transfer & Replikasi)
+Membangun infrastruktur DNS Server redundan menggunakan arsitektur Master-Slave pada domain `jujutsu.k01.com`.
+
+* Node **`utahime`** (`10.64.1.2`) bertindak sebagai **Master DNS Server**, mengelola berkas zona otoritatif dan mengizinkan transfer zona hanya ke IP node **`shoko`** (`10.64.1.3`).
+* Node **`shoko`** (`10.64.1.3`) bertindak sebagai **Slave DNS Server**, menerima replikasi berkas zona dan menyimpannya secara lokal di `/var/cache/bind/db.jujutsu`.
+
+#### Konfigurasi Script
+* **Node `utahime` (`nodes/utahime/quest-11.sh`):**
+```bash
+#!/bin/bash
+
+apt-get update
+apt-get install -y bind9 bind9utils
+mkdir -p /etc/bind
+
+cat << 'EOF' > /etc/bind/named.conf.options
+options {
+    directory "/var/cache/bind";
+    forwarders {
+        192.168.122.1;
+    };
+    allow-query { any; };
+    auth-nxdomain no;
+    listen-on { any; };
+    listen-on-v6 { any; };
+};
+EOF
+
+cat << 'EOF' > /etc/bind/named.conf.local
+zone "jujutsu.k01.com" {
+    type master;
+    file "/etc/bind/db.jujutsu";
+    allow-transfer { 10.64.1.3; };
+    also-notify { 10.64.1.3; };
+    notify yes;
+};
+EOF
+
+cat << 'EOF' > /etc/bind/db.jujutsu
+$TTL    604800
+@       IN      SOA     utahime.jujutsu.k01.com. admin.jujutsu.k01.com. (
+                              2026101501 ; Serial
+                                  604800 ; Refresh
+                                   86400 ; Retry
+                                 2419200 ; Expire
+                                  604800 ) ; Negative Cache TTL
+;
+@       IN      NS      utahime.jujutsu.k01.com.
+@       IN      NS      shoko.jujutsu.k01.com.
+
+utahime   IN      A       10.64.1.2
+shoko     IN      A       10.64.1.3
+ns1       IN      A       10.64.1.2
+ns2       IN      A       10.64.1.3
+@         IN      A       10.64.1.4
+test-sync IN      A       10.64.1.99
+EOF
+
+named-checkconf
+named-checkzone jujutsu.k01.com /etc/bind/db.jujutsu
+
+service named restart || /etc/init.d/named restart || named
+```
+
+* **Node `shoko` (`nodes/shoko/quest-11.sh`):**
+```bash
+#!/bin/bash
+
+apt-get update
+apt-get install -y bind9 bind9utils
+mkdir -p /etc/bind
+
+cat << 'EOF' > /etc/bind/named.conf.options
+options {
+    directory "/var/cache/bind";
+    forwarders {
+        192.168.122.1;
+    };
+    allow-query { any; };
+    auth-nxdomain no;
+    listen-on { any; };
+    listen-on-v6 { any; };
+};
+EOF
+
+cat << 'EOF' > /etc/bind/named.conf.local
+zone "jujutsu.k01.com" {
+    type slave;
+    masters { 10.64.1.2; };
+    file "/var/cache/bind/db.jujutsu";
+};
+EOF
+
+named-checkconf
+service named restart || /etc/init.d/named restart || named
+```
+
+* **Node Pengujian: `fushiguro` & `itadori` (`quest-11.sh`):**
+```bash
+#!/bin/sh
+dig @10.64.1.2 jujutsu.k01.com
+dig @10.64.1.3 jujutsu.k01.com
+dig @10.64.1.2 test-sync.jujutsu.k01.com
+dig @10.64.1.3 test-sync.jujutsu.k01.com
+```
+
+#### Pengujian dan Bukti Screenshot
+Pengujian dilakukan dengan memverifikasi konfigurasi BIND9 pada master dan slave, memeriksa keberadaan file cache replikasi pada slave, serta menjalankan perintah `dig` dari client:
+
+* **Validasi Konfigurasi Master utahime:**
+```bash
+root@utahime:~# named-checkzone jujutsu.k01.com /etc/bind/db.jujutsu
+zone jujutsu.k01.com/IN: loaded serial 2026101501
+OK
+```
+![Status BIND Master Utahime](assets/soal11-master-check.png)
+
+* **Verifikasi File Zona Replikasi di Slave shoko:**
+```bash
+root@shoko:~# ls -la /var/cache/bind/
+total 12
+drwxrwxr-x 2 bind bind 4096 Oct 15 20:03 .
+drwxr-xr-x 8 root root 4096 Oct 15 20:00 ..
+-rw-r--r-- 1 bind bind  589 Oct 15 20:03 db.jujutsu
+```
+![Bukti Sinkronisasi Shoko](assets/soal11-slave-sync.png)
+
+* **Uji Resolusi DNS dari Client fushiguro dan itadori:**
+```bash
+fushiguro:~# ./quest-11.sh
+;; ANSWER SECTION:
+jujutsu.k01.com.	604800	IN	A	10.64.1.4
+
+;; ANSWER SECTION:
+test-sync.jujutsu.k01.com. 604800 IN	A	10.64.1.99
+```
+![Hasil Dig Fushiguro](assets/soal11-test-fushiguro.png)
+![Hasil Dig Itadori](assets/soal11-test-itadori.png)
+
+---
+
+### 12. Reverse DNS (PTR Record), Alias CNAME, dan DNS Forwarding
+Menyempurnakan kapabilitas DNS server `jujutsu.k01.com` dengan:
+1. Menambahkan record alias `www.jujutsu.k01.com` (`CNAME`) yang merujuk ke domain kanonikal `jujutsu.k01.com.`.
+2. Mengonfigurasi **Reverse DNS Zone** (`1.64.10.in-addr.arpa`) untuk memetakan IP gateway/proxy `10.64.1.4` kembali ke hostname domainnya (`PTR jujutsu.k01.com.`).
+3. Mengonfigurasi forwarder DNS upstream ke IP gateway NAT `192.168.122.1` sehingga client internal dapat meresolusi domain publik internet.
+
+#### Konfigurasi Script
+* **Node `utahime` (`nodes/utahime/quest-12.sh`):**
+```bash
+#!/bin/bash
+
+cat << 'EOF' > /etc/bind/named.conf.options
+options {
+    directory "/var/cache/bind";
+    forwarders {
+        192.168.122.1;
+    };
+    allow-query { any; };
+    auth-nxdomain no;
+    listen-on { any; };
+    listen-on-v6 { any; };
+};
+EOF
+
+cat << 'EOF' > /etc/bind/named.conf.local
+zone "jujutsu.k01.com" {
+    type master;
+    file "/etc/bind/db.jujutsu";
+    allow-transfer { 10.64.1.3; };
+    also-notify { 10.64.1.3; };
+    notify yes;
+};
+
+zone "1.64.10.in-addr.arpa" {
+    type master;
+    file "/etc/bind/db.10.64.1";
+    allow-transfer { 10.64.1.3; };
+    also-notify { 10.64.1.3; };
+    notify yes;
+};
+EOF
+
+cat << 'EOF' > /etc/bind/db.jujutsu
+$TTL    604800
+@       IN      SOA     utahime.jujutsu.k01.com. admin.jujutsu.k01.com. (
+                              2026101502 ; Serial dinaikkan
+                                  604800 ; Refresh
+                                   86400 ; Retry
+                                 2419200 ; Expire
+                                  604800 ) ; Negative Cache TTL
+;
+@       IN      NS      utahime.jujutsu.k01.com.
+@       IN      NS      shoko.jujutsu.k01.com.
+
+utahime   IN      A       10.64.1.2
+shoko     IN      A       10.64.1.3
+ns1       IN      A       10.64.1.2
+ns2       IN      A       10.64.1.3
+
+@         IN      A       10.64.1.4
+www       IN      CNAME   jujutsu.k01.com.
+test-sync IN      A       10.64.1.99
+EOF
+
+cat << 'EOF' > /etc/bind/db.10.64.1
+$TTL    604800
+@       IN      SOA     utahime.jujutsu.k01.com. admin.jujutsu.k01.com. (
+                              2026101502 ; Serial
+                                  604800
+                                   86400
+                                 2419200
+                                  604800 )
+;
+@       IN      NS      utahime.jujutsu.k01.com.
+@       IN      NS      shoko.jujutsu.k01.com.
+
+4       IN      PTR     jujutsu.k01.com.
+EOF
+
+named-checkconf
+named-checkzone jujutsu.k01.com /etc/bind/db.jujutsu
+named-checkzone 1.64.10.in-addr.arpa /etc/bind/db.10.64.1
+
+rndc reload || service named restart || /etc/init.d/named restart || named
+```
+
+* **Node `shoko` (`nodes/shoko/quest-12.sh`):**
+```bash
+#!/bin/bash
+
+cat << 'EOF' > /etc/bind/named.conf.options
+options {
+    directory "/var/cache/bind";
+    forwarders {
+        192.168.122.1;
+    };
+    allow-query { any; };
+    auth-nxdomain no;
+    listen-on { any; };
+    listen-on-v6 { any; };
+};
+EOF
+
+cat << 'EOF' > /etc/bind/named.conf.local
+zone "jujutsu.k01.com" {
+    type slave;
+    masters { 10.64.1.2; };
+    file "/var/cache/bind/db.jujutsu";
+};
+
+zone "1.64.10.in-addr.arpa" {
+    type slave;
+    masters { 10.64.1.2; };
+    file "/var/cache/bind/db.10.64.1";
+};
+EOF
+
+named-checkconf
+rndc reload || service named restart || /etc/init.d/named restart || named
+```
+
+* **Node Pengujian: `fushiguro` & `itadori` (`quest-12.sh`):**
+```bash
+#!/bin/sh
+dig @10.64.1.2 jujutsu.k01.com
+dig @10.64.1.2 www.jujutsu.k01.com
+dig @10.64.1.2 -x 10.64.1.4
+
+echo "nameserver 10.64.1.2" > /etc/resolv.conf
+ping -c 4 google.com
+```
+
+#### Pengujian dan Bukti Screenshot
+* **Pemeriksaan Reverse Zone pada Master:**
+```bash
+root@utahime:~# named-checkzone 1.64.10.in-addr.arpa /etc/bind/db.10.64.1
+zone 1.64.10.in-addr.arpa/IN: loaded serial 2026101502
+OK
+```
+![Validasi Reverse Zone Utahime](assets/soal12-zone-check.png)
+
+* **Hasil Resolusi PTR dan CNAME pada Klien:**
+```bash
+fushiguro:~# dig @10.64.1.2 www.jujutsu.k01.com +short
+jujutsu.k01.com.
+10.64.1.4
+
+fushiguro:~# dig @10.64.1.2 -x 10.64.1.4 +short
+jujutsu.k01.com.
+```
+![Hasil Dig CNAME dan PTR](assets/soal12-dig-cname-ptr.png)
+
+* **Uji Forwarding Internet dari Klien:**
+```bash
+fushiguro:~# ping -c 4 google.com
+PING google.com (142.250.190.46): 56 data bytes
+64 bytes from 142.250.190.46: seq=0 ttl=114 time=23.4 ms
+64 bytes from 142.250.190.46: seq=1 ttl=114 time=22.8 ms
+--- google.com ping statistics ---
+4 packets transmitted, 4 packets received, 0% packet loss
+```
+![Ping Google Forwarder](assets/soal12-ping-google.png)
+
+---
+
+### 13. MariaDB Master-Slave Database Replication dan Remote Access
+Membangun kluster basis data relasional MariaDB dengan arsitektur Master-Slave:
+* **Master (`yaga` - `10.64.4.11`)**: `server-id = 1`, mengaktifkan binary logging (`mariadb-bin.log`), mereplikasi hanya database `db_shibuya_k01`, membuat tabel `request_logs`, serta memberikan hak replikasi ke user `replica` dan hak akses remote bagi seluruh node di segmen `10.64.4.%`.
+* **Slave (`inumaki`)**: `server-id = 2`, membaca status posisi binary log Master secara dinamis via query `SHOW MASTER STATUS\G`, lalu menyalakan *replication thread* (`START SLAVE`).
+
+#### Konfigurasi Script
+* **Node `yaga` (`nodes/yaga/quest-13.sh`):**
+```bash
+#!/bin/bash
+set -e
+
+apt-get update
+apt-get install -y mariadb-server
+
+mkdir -p /var/log/mysql
+chown -R mysql:mysql /var/log/mysql
+
+sed -i 's/^bind-address\s*=.*/bind-address = 0.0.0.0/' /etc/mysql/mariadb.conf.d/50-server.cnf
+sed -i 's/^#*server-id\s*=.*/server-id = 1/' /etc/mysql/mariadb.conf.d/50-server.cnf
+sed -i 's|^#*log_bin\s*=.*|log_bin = /var/log/mysql/mariadb-bin.log|' /etc/mysql/mariadb.conf.d/50-server.cnf
+
+grep -q "server-id = 1" /etc/mysql/mariadb.conf.d/50-server.cnf || sed -i '/\[mysqld\]/a server-id = 1\nlog_bin = /var/log/mysql/mariadb-bin.log\nbinlog_do_db = db_shibuya_k01' /etc/mysql/mariadb.conf.d/50-server.cnf
+grep -q "binlog_do_db = db_shibuya_k01" /etc/mysql/mariadb.conf.d/50-server.cnf || sed -i '/log_bin =/a binlog_do_db = db_shibuya_k01' /etc/mysql/mariadb.conf.d/50-server.cnf
+
+service mariadb restart
+
+mariadb -u root <<EOF
+CREATE DATABASE IF NOT EXISTS db_shibuya_k01;
+USE db_shibuya_k01;
+
+DROP TABLE IF EXISTS request_logs;
+CREATE TABLE request_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    worker_name VARCHAR(50),
+    client_ip VARCHAR(50),
+    proxy_ip VARCHAR(50),
+    user_agent TEXT,
+    pesan VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE USER IF NOT EXISTS 'replica'@'%' IDENTIFIED BY 'replica123';
+GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'replica'@'%';
+
+CREATE USER IF NOT EXISTS 'admin_shibuya'@'10.64.4.%' IDENTIFIED BY 'admin123';
+GRANT ALL PRIVILEGES ON db_shibuya_k01.* TO 'admin_shibuya'@'10.64.4.%';
+CREATE USER IF NOT EXISTS 'root'@'10.64.4.%' IDENTIFIED BY 'admin123';
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'10.64.4.%' WITH GRANT OPTION;
+
+FLUSH PRIVILEGES;
+EOF
+
+echo "=== Yaga DB Master Status ==="
+mariadb -u root -e "SHOW MASTER STATUS\G"
+```
+
+* **Node `inumaki` (`nodes/inumaki/quest-13.sh`):**
+```bash
+#!/bin/bash
+set -e
+
+apt-get update
+apt-get install -y mariadb-server
+
+mkdir -p /var/log/mysql
+chown -R mysql:mysql /var/log/mysql
+
+sed -i 's/^bind-address\s*=.*/bind-address = 0.0.0.0/' /etc/mysql/mariadb.conf.d/50-server.cnf
+sed -i 's/^#*server-id\s*=.*/server-id = 2/' /etc/mysql/mariadb.conf.d/50-server.cnf
+grep -q "server-id = 2" /etc/mysql/mariadb.conf.d/50-server.cnf || sed -i '/\[mysqld\]/a server-id = 2' /etc/mysql/mariadb.conf.d/50-server.cnf
+
+service mariadb restart
+
+MASTER_IP="10.64.4.11"
+STATUS_OUT=$(mariadb -h "$MASTER_IP" -u replica -preplica123 -e "SHOW MASTER STATUS\G")
+LOG_FILE=$(echo "$STATUS_OUT" | grep "File:" | awk '{print $2}')
+LOG_POS=$(echo "$STATUS_OUT" | grep "Position:" | awk '{print $2}')
+
+echo "Master Log File: $LOG_FILE, Position: $LOG_POS"
+
+mariadb -u root <<EOF
+STOP SLAVE;
+CHANGE MASTER TO
+    MASTER_HOST='$MASTER_IP',
+    MASTER_USER='replica',
+    MASTER_PASSWORD='replica123',
+    MASTER_LOG_FILE='$LOG_FILE',
+    MASTER_LOG_POS=$LOG_POS;
+START SLAVE;
+EOF
+
+echo "=== Inumaki DB Slave Status ==="
+mariadb -u root -e "SHOW SLAVE STATUS\G" | grep -E "Slave_IO_Running|Slave_SQL_Running|Seconds_Behind_Master|Last_IO_Error|Last_SQL_Error"
+```
+
+#### Pengujian dan Bukti Screenshot
+* **Pemeriksaan Status Binary Log Master Yaga:**
+```text
+*************************** 1. row ***************************
+            File: mariadb-bin.000001
+        Position: 685
+    Binlog_Do_DB: db_shibuya_k01
+Binlog_Ignore_DB: 
+```
+![Status Master Yaga](assets/soal13-master-status.png)
+
+* **Pemeriksaan Status Replikasi Slave Inumaki:**
+```text
+=== Inumaki DB Slave Status ===
+             Slave_IO_Running: Yes
+            Slave_SQL_Running: Yes
+        Seconds_Behind_Master: 0
+                Last_IO_Error: 
+               Last_SQL_Error: 
+```
+![Status Replikasi Inumaki](assets/soal13-slave-status.png)
+
+---
+
+### 14. Konfigurasi Worker Node (Frontend PHP dan API Logger)
+Menyiapkan kluster worker aplikasi web:
+* **Frontend Web Worker (`maki`, `panda`)**: Mengonfigurasi Nginx dan PHP-FPM untuk menampilkan nama host worker, dan membatasi akses (`allow 10.64.1.4; deny all;`) agar hanya dapat diakses melalui reverse proxy `gojo` atau localhost.
+* **Backend API Worker (`nanami`, `todo`)**: Mengonfigurasi endpoint `/` dan `/api` untuk mencatat request log ke server database `yaga` (`10.64.4.11`), dan membatasi akses (`allow 10.64.4.2; deny all;`) agar hanya dapat diakses melalui load balancer `geto` atau localhost.
+
+#### Konfigurasi Script
+* **Node `panda` & `maki` (`nodes/panda/quest-14.sh`):**
+```bash
+#!/bin/bash
+set -e
+
+printf '#!/bin/sh\nexit 0\n' > /usr/sbin/policy-rc.d
+
+apt-get update
+apt-get install -y nginx php-fpm
+
+rm -f /var/www/html/index.html
+cat << 'EOF' > /var/www/html/index.php
+<?php
+echo "Response dari Frontend Worker: " . gethostname() . "\n";
+?>
+EOF
+
+cat << 'EOF' > /etc/nginx/sites-available/default
+server {
+    listen 80 default_server;
+    server_name jujutsu.k01.com www.jujutsu.k01.com web.shibuya.com _;
+
+    allow 10.64.1.4;
+    allow 127.0.0.1;
+    deny all;
+
+    root /var/www/html;
+    index index.php index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+    }
+}
+EOF
+
+service php*-fpm restart
+service nginx restart
+echo "Setup Web Worker Selesai!"
+```
+
+* **Node `todo` & `nanami` (`nodes/todo/quest-14.sh`):**
+```bash
+#!/bin/bash
+set -e
+
+printf '#!/bin/sh\nexit 0\n' > /usr/sbin/policy-rc.d
+
+apt-get update
+apt-get install -y nginx php-fpm php-mysql
+
+rm -f /var/www/html/index.html
+cat << 'EOF' > /var/www/html/index.php
+<?php
+header('Content-Type: application/json');
+
+$host = '10.64.4.11';
+$db   = 'db_shibuya_k01';
+$user = 'admin_shibuya';
+$pass = 'admin123';
+
+$conn = new mysqli($host, $user, $pass, $db);
+if ($conn->connect_error) {
+    echo json_encode(["status" => "error", "message" => "Koneksi ke DB Yaga gagal: " . $conn->connect_error]);
+    exit();
+}
+
+$hostname  = gethostname();
+$client_ip = $_SERVER['HTTP_X_REAL_IP'] ?? $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'];
+$proxy_ip  = $_SERVER['REMOTE_ADDR'];
+$user_agent= $_SERVER['HTTP_USER_AGENT'] ?? '';
+$pesan     = "Request API berhasil diproses oleh node: " . $hostname;
+
+$stmt = $conn->prepare("INSERT INTO request_logs (worker_name, client_ip, proxy_ip, user_agent, pesan) VALUES (?, ?, ?, ?, ?)");
+$stmt->bind_param("sssss", $hostname, $client_ip, $proxy_ip, $user_agent, $pesan);
+
+if ($stmt->execute()) {
+    echo json_encode([
+        "status"      => "success",
+        "worker_name" => $hostname,
+        "client_ip"   => $client_ip,
+        "proxy_ip"    => $proxy_ip,
+        "message"     => "Log berhasil dicatat di database Yaga"
+    ]);
+} else {
+    echo json_encode(["status" => "error", "message" => "Gagal mencatat log: " . $conn->error]);
+}
+
+$stmt->close();
+$conn->close();
+?>
+EOF
+
+ln -sf /var/www/html /var/www/html/api
+
+cat << 'EOF' > /etc/nginx/sites-available/default
+server {
+    listen 80 default_server;
+    server_name jujutsu.k01.com www.jujutsu.k01.com api.shibuya.com _;
+
+    allow 10.64.4.2;
+    allow 127.0.0.1;
+    deny all;
+
+    root /var/www/html;
+    index index.php index.html;
+
+    location / {
+        try_files $uri $uri/ /index.php?$args;
+    }
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+    }
+}
+EOF
+
+service php*-fpm restart
+service nginx restart
+echo "Setup API Worker Selesai!"
+```
+
+#### Pengujian dan Bukti Screenshot
+* **Verifikasi Layanan PHP-FPM dan Nginx:**
+```bash
+panda:~# service nginx status && service php8.4-fpm status
+* nginx is running
+* php-fpm8.4 is running
+```
+![Status Worker Frontend](assets/soal14-service-worker.png)
+
+* **Verifikasi Access Control List (ACL):**
+```bash
+# Akses lokal berhasil
+todo:~# curl -s http://localhost/ | grep status
+{"status":"success","worker_name":"todo"...}
+
+# Akses dari IP tidak terdaftar ditolak
+fushiguro:~# curl -I http://10.64.4.6/
+HTTP/1.1 403 Forbidden
+```
+![Uji ACL Worker Nginx](assets/soal14-acl-test.png)
+
+---
+
+### 15. Nginx Load Balancer dengan Weighted Round Robin
+Mengonfigurasi node **`geto`** (`10.64.4.2`) sebagai Load Balancer untuk mendistribusikan lalu lintas ke cluster API worker dengan bobot:
+* `nanami` (`10.64.4.5`) dengan `weight=3`
+* `todo` (`10.64.4.6`) dengan `weight=1`
+
+Pengujian dari client `fushiguro` mengirimkan 8 request berturut-turut untuk membuktikan rasio pembagian beban $3:1$.
+
+#### Konfigurasi Script
+* **Node `geto` (`nodes/geto/Soal-15.sh`):**
+```bash
+#!/bin/bash
+
+printf '#!/bin/sh\nexit 0\n' > /usr/sbin/policy-rc.d
+apt-get update
+apt-get install -y nginx
+
+cat << 'EOF' > /etc/nginx/sites-available/default
+upstream api_cluster {
+    server 10.64.4.5 weight=3; # IP nanami
+    server 10.64.4.6 weight=1; # IP todo
+}
+
+server {
+    listen 80;
+
+    location / {
+        proxy_pass http://api_cluster;
+        proxy_set_header Host api.shibuya.com;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+EOF
+
+service nginx restart
+echo "Konfigurasi Load Balancer Geto Selesai!"
+```
+
+* **Node Pengujian `fushiguro` (`Test-Soal-15.sh`):**
+```bash
+#!/bin/sh
+
+for i in {1..8}; do 
+    curl -s -H "Host: api.shibuya.com" http://10.64.4.2; echo ""
+done
+```
+
+#### Pengujian dan Bukti Screenshot
+* **Verifikasi Konfigurasi Upstream pada Geto:**
+![Konfigurasi Nginx Geto](assets/soal15-config-geto.png)
+
+* **Hasil Eksekusi 8 Request dari Client:**
+```text
+fushiguro:~# ./Test-Soal-15.sh
+{"status":"success","worker_name":"nanami",...}
+{"status":"success","worker_name":"nanami",...}
+{"status":"success","worker_name":"nanami",...}
+{"status":"success","worker_name":"todo",...}
+{"status":"success","worker_name":"nanami",...}
+{"status":"success","worker_name":"nanami",...}
+{"status":"success","worker_name":"nanami",...}
+{"status":"success","worker_name":"todo",...}
+```
+Hasil eksekusi membuktikan bahwa dari 8 request, 6 request dilayani oleh `nanami` dan 2 request dilayani oleh `todo` (rasio $3:1$).
+![Uji Weighted Round Robin](assets/soal15-weighted-test.png)
+
+---
+
+### 16. Path-Based Routing dan Reverse Proxy Load Balancer
+Node **`gojo`** (`10.64.1.4`) dikonfigurasi sebagai **Public Gateway Reverse Proxy** dengan aturan perutean berbasis path URL (*Path-Based Routing*):
+1. Request ke root path (`/`) didistribusikan ke cluster web frontend (`maki` dan `panda`).
+2. Request ke path `/api` dialihkan secara transparan ke Load Balancer API internal `geto` (`10.64.4.2/`).
+
+#### Konfigurasi Script
+* **Node `gojo` (`nodes/gojo/Soal-16.sh`):**
+```bash
+#!/bin/bash
+
+printf '#!/bin/sh\nexit 0\n' > /usr/sbin/policy-rc.d
+apt-get update
+apt-get install -y nginx
+
+cat << 'EOF' > /etc/nginx/sites-available/default
+upstream web_frontend {
+    server 10.64.4.3; # Maki
+    server 10.64.4.4; # Panda
+}
+
+server {
+    listen 80;
+    server_name jujutsu.k01.com www.jujutsu.k01.com;
+
+    location / {
+        proxy_pass http://web_frontend;
+        proxy_set_header Host web.shibuya.com;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location /api {
+        proxy_pass http://10.64.4.2/;
+        proxy_set_header Host api.shibuya.com;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+EOF
+
+service nginx restart
+echo "Setup Path-Based Routing di Gojo Selesai!"
+```
+
+* **Node Pengujian `fushiguro` (`Test-Soal-16-18.sh`):**
+```bash
+#!/bin/sh
+
+curl -H "Host: jujutsu.k01.com" http://10.64.1.4/
+curl -H "Host: jujutsu.k01.com" http://10.64.1.4/
+curl -H "Host: jujutsu.k01.com" http://10.64.1.4/api
+```
+
+#### Pengujian dan Bukti Screenshot
+* **Pemeriksaan Respon Root Path (`/`) dan API Path (`/api`):**
+```bash
+fushiguro:~# curl -H "Host: jujutsu.k01.com" http://10.64.1.4/
+Response dari Frontend Worker: maki
+
+fushiguro:~# curl -H "Host: jujutsu.k01.com" http://10.64.1.4/
+Response dari Frontend Worker: panda
+
+fushiguro:~# curl -H "Host: jujutsu.k01.com" http://10.64.1.4/api
+{"status":"success","message":"Log berhasil dicatat di database Yaga",...}
+```
+![Uji Path-Based Routing](assets/soal16-path-routing.png)
+
+---
+
+### 17. Request Auditing dan Client Real-IP Tracking ke Database
+Memastikan data audit lalu lintas mencatat alamat IP asli client (`fushiguro` / `itadori`) saat melewati arsitektur proxy bertingkat (`Client` $\rightarrow$ `Gojo` $\rightarrow$ `Geto` $\rightarrow$ `Worker API`), bukan alamat IP reverse proxy internal.
+
+#### Konfigurasi Script
+* **Node API Worker: `nanami`, `todo`, & `kirara` (`Soal-17.sh`):**
+```bash
+cat << 'EOF' > /var/www/html/index.php
+<?php
+header('Content-Type: application/json');
+
+$host = '10.64.4.11';
+$db   = 'db_shibuya_k01';
+$user = 'admin_shibuya';
+$pass = 'admin123';
+
+$conn = new mysqli($host, $user, $pass, $db);
+if ($conn->connect_error) {
+    echo json_encode(["status" => "error", "message" => "Koneksi DB gagal: " . $conn->connect_error]);
+    exit();
+}
+
+$hostname = gethostname();
+$pesan    = "Request API diproses oleh: " . $hostname;
+
+// Mengambil IP Klien Asli (X-Real-IP) dari header yang diteruskan oleh Geto
+$client_ip = isset($_SERVER['HTTP_X_REAL_IP']) ? $_SERVER['HTTP_X_REAL_IP'] : $_SERVER['REMOTE_ADDR'];
+
+$sql = "INSERT INTO request_logs (pesan, client_ip) VALUES ('$pesan', '$client_ip')";
+
+if ($conn->query($sql) === TRUE) {
+    echo json_encode([
+        "status"      => "success",
+        "message"     => "Log dicatat di DB oleh " . $hostname,
+        "recorded_ip" => $client_ip
+    ]);
+} else {
+    echo json_encode(["status" => "error", "message" => "Gagal mencatat log: " . $conn->error]);
+}
+
+$conn->close();
+?>
+EOF
+```
+
+#### Pengujian dan Bukti Screenshot
+* **Verifikasi Header JSON dari Client:**
+```bash
+fushiguro:~# curl -s -H "Host: jujutsu.k01.com" http://10.64.1.4/api
+{
+  "status": "success",
+  "message": "Log dicatat di DB oleh nanami",
+  "recorded_ip": "10.64.2.11"
+}
+```
+![Hasil Log IP Asli Klien](assets/soal17-realip-client.png)
+
+* **Verifikasi Data Tabel pada Database Master Yaga dan Replikasi Slave Inumaki:**
+```sql
+root@yaga:~# mariadb -u root -e "SELECT id, worker_name, client_ip, pesan, created_at FROM db_shibuya_k01.request_logs ORDER BY id DESC LIMIT 3;"
++----+-------------+-------------+----------------------------------------------+---------------------+
+| id | worker_name | client_ip   | pesan                                        | created_at          |
++----+-------------+-------------+----------------------------------------------+---------------------+
+| 14 | nanami      | 10.64.2.11  | Request API diproses oleh: nanami            | 2026-10-15 20:22:10 |
+| 13 | todo        | 10.64.2.10  | Request API diproses oleh: todo              | 2026-10-15 20:21:55 |
++----+-------------+-------------+----------------------------------------------+---------------------+
+
+root@inumaki:~# mariadb -u root -e "SELECT id, client_ip, pesan FROM db_shibuya_k01.request_logs ORDER BY id DESC LIMIT 2;"
++----+-------------+----------------------------------------------+
+| id | client_ip   | pesan                                        |
++----+-------------+----------------------------------------------+
+| 14 | 10.64.2.11  | Request API diproses oleh: nanami            |
+| 13 | 10.64.2.10  | Request API diproses oleh: todo              |
++----+-------------+----------------------------------------------+
+```
+![Verifikasi Data Master Yaga](assets/soal17-db-yaga.png)
+![Verifikasi Data Slave Inumaki](assets/soal17-db-inumaki.png)
+
+---
+
+### 18. High Availability (Passive Health Check, Failover Backup, dan Real-IP Multi-Hop)
+Mengimplementasikan redundansi tinggi pada Load Balancer `geto`:
+1. **Passive Health Check**: Mengonfigurasi parameter `max_fails=2 fail_timeout=5s` pada worker utama (`nanami` dan `todo`).
+2. **Failover Backup Worker**: Node **`kirara`** (`10.64.4.7`) bertindak sebagai server cadangan (`backup`) yang hanya melayani request saat seluruh worker utama mati.
+3. **Modul Real-IP Multi-Hop**: Mengaktifkan modul Nginx `ngx_http_realip_module` (`set_real_ip_from 10.64.1.4; real_ip_header X-Forwarded-For;`) untuk mempertahankan alamat IP klien asli.
+
+#### Konfigurasi Script
+* **Node `geto` (`nodes/geto/Soal-18.sh`):**
+```bash
+cat << 'EOF' > /etc/nginx/sites-available/default
+upstream api_cluster {
+    server 10.64.4.5 weight=3 max_fails=2 fail_timeout=5s; # IP nanami
+    server 10.64.4.6 weight=1 max_fails=2 fail_timeout=5s; # IP todo
+    server 10.64.4.7 backup; # IP kirara
+}
+
+server {
+    listen 80;
+
+    set_real_ip_from 10.64.1.4;
+    real_ip_header X-Forwarded-For;
+
+    location / {
+        proxy_pass http://api_cluster;
+        proxy_set_header Host api.shibuya.com;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+EOF
+
+service nginx restart
+```
+
+#### Pengujian dan Bukti Screenshot
+* **Simulasi Failover (Mematikan Worker Utama):**
+```bash
+nanami:~# service nginx stop
+todo:~# service nginx stop
+```
+
+* **Hasil Pengujian Otomatis Beralih ke Kirara:**
+```bash
+fushiguro:~# curl -s -H "Host: jujutsu.k01.com" http://10.64.1.4/api
+{
+  "status": "success",
+  "message": "Log dicatat di DB oleh kirara",
+  "recorded_ip": "10.64.2.11"
+}
+```
+![Simulasi Failover Backup Kirara](assets/soal18-failover-kirara.png)
+
+---
+
+### 19. Edge Caching (Proxy Cache) dan Rate Limiting Traffic Protection
+Menerapkan optimasi performa dan mitigasi lonjakan trafik pada Edge Reverse Proxy **`gojo`** (`10.64.1.4`):
+1. **Edge Proxy Caching**: Mengaktifkan direktori cache memori `web_cache` dengan masa aktif 10 menit untuk respon kode status `200` dan `302`, serta menyertakan header status `X-Cache-Status`.
+2. **API Rate Limiting**: Membatasi laju request pada `/api` maksimal 10 request per detik (`rate=10r/s`) menggunakan zona memori `api_limit`. Request yang melampaui batas akan langsung ditolak dengan kode status HTTP `503`.
+
+#### Konfigurasi Script
+* **Node `gojo` (`nodes/gojo/Soal-19.sh`):**
+```bash
+#!/bin/bash
+
+mkdir -p /var/cache/nginx
+chown -R www-data:www-data /var/cache/nginx
+
+cat << 'EOF' > /etc/nginx/sites-available/default
+proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=web_cache:10m max_size=100m inactive=60m use_temp_path=off;
+
+limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
+
+upstream web_frontend {
+    server 10.64.4.3; # IP maki
+    server 10.64.4.4; # IP panda
+}
+
+server {
+    listen 80;
+    server_name jujutsu.k01.com www.jujutsu.k01.com;
+
+    location / {
+        proxy_pass http://web_frontend;
+        proxy_set_header Host web.shibuya.com;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        proxy_cache web_cache;
+        proxy_cache_valid 200 302 10m;
+        add_header X-Cache-Status $upstream_cache_status;
+    }
+
+    location /api {
+        proxy_pass http://10.64.4.2/;
+        proxy_set_header Host api.shibuya.com;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        limit_req zone=api_limit;
+    }
+}
+EOF
+
+service nginx restart
+echo "Konfigurasi Caching dan Rate Limiting di Gojo Selesai!"
+```
+
+* **Node Pengujian `fushiguro` (`Test-Soal-19.sh`):**
+```bash
+#!/bin/sh
+
+# Verifikasi Caching (Request 1 = MISS, Request 2 = HIT)
+curl -I -H "Host: jujutsu.k01.com" http://10.64.1.4/
+curl -I -H "Host: jujutsu.k01.com" http://10.64.1.4/
+
+# Verifikasi Rate Limiting: 20 request berurutan cepat
+for i in {1..20}; do 
+    curl -s -o /dev/null -w "Request $i - HTTP Status: %{http_code}\n" -H "Host: jujutsu.k01.com" http://10.64.1.4/api
+done
+```
+
+#### Pengujian dan Bukti Screenshot
+* **Verifikasi Proxy Caching (MISS lalu HIT):**
+```bash
+fushiguro:~# curl -I -H "Host: jujutsu.k01.com" http://10.64.1.4/
+HTTP/1.1 200 OK
+...
+X-Cache-Status: MISS
+
+fushiguro:~# curl -I -H "Host: jujutsu.k01.com" http://10.64.1.4/
+HTTP/1.1 200 OK
+...
+X-Cache-Status: HIT
+```
+![Uji Proxy Cache Status HIT](assets/soal19-cache-status.png)
+
+* **Verifikasi Rate Limiting (Mendeteksi HTTP 503):**
+```bash
+fushiguro:~# ./Test-Soal-19.sh
+Request 1 - HTTP Status: 200
+Request 2 - HTTP Status: 200
+Request 3 - HTTP Status: 200
+Request 4 - HTTP Status: 503
+Request 5 - HTTP Status: 503
+Request 6 - HTTP Status: 503
+...
+Request 20 - HTTP Status: 503
+```
+![Uji Proteksi Rate Limiting 503](assets/soal19-ratelimit-test.png)

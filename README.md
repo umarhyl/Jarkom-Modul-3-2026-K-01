@@ -550,6 +550,7 @@ Pengujian hanya diambil langsung dari node pengujian **`fushiguro`** dengan menj
 * **Uji Resolusi DNS Otoritatif Master & Slave dari Klien `fushiguro`:**
   
   ![Pengujian DNS Master Slave](assets/quest11-dig-test.png)
+  ![Pengujian DNS Master Slave](assets/quest11-dig-test2.png)
 
 
 ---

@@ -3,4 +3,5 @@
 curl -H "Host: jujutsu.k01.com" http://10.64.1.4/
 curl -H "Host: jujutsu.k01.com" http://10.64.1.4/
 
+# Soal 16-17
 curl -H "Host: jujutsu.k01.com" http://10.64.1.4/api

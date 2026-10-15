@@ -699,6 +699,7 @@ Pengujian seluruh fungsionalitas (resolusi record A, record alias CNAME, PTR rev
 * **Eksekusi Pengujian Terpadu pada Node `fushiguro`:**
   
   ![Pengujian Reverse DNS, CNAME, dan Ping](assets/quest12-reverse-cname.png)
+  ![Pengujian Reverse DNS, CNAME, dan Ping](assets/quest12-reverse-cname2.png)
 
 
 ---

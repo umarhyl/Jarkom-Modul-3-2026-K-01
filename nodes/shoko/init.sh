@@ -11,3 +11,7 @@ EOF
 cat <<EOF > /etc/resolv.conf
 nameserver 192.168.122.1
 EOF
+
+# Quest 11 & 12
+/root/quest-11.sh
+/root/quest-12.sh

@@ -1293,3 +1293,32 @@ Pengujian cache header (`MISS` $\rightarrow$ `HIT`) serta rate limiting diambil 
 * **Hasil Eksekusi Caching dan Rate Limiting dari Klien `fushiguro`:**
   
   ![Pengujian Caching dan Rate Limiting](assets/quest19-cache-rate-limit.png)
+
+### 20. Pengujian Beban dan Analisis Performa Arsitektur Web Menggunakan Apache Benchmark
+
+Untuk mengevaluasi ketahanan, stabilitas, dan efektivitas mekanisme keamanan serta caching yang telah diimplementasikan pada arsitektur server, dilakukan uji beban (*stress test / load testing*) menggunakan utilitas **Apache Benchmark (`ab`)**. Pengujian disimulasikan dari node klien penguji terhadap server reverse proxy `gojo` (`10.64.1.4`) dengan parameter beban **600 permintaan** dan tingkat konkurensi **30 koneksi simultan** (`-n 600 -c 30`).
+
+Evaluasi performa ditargetkan pada dua jalur (*path*) berbeda:
+1. **Endpoint Frontend (`/`)**: Menguji efektivitas akselerasi **Proxy Caching** (`web_cache`) dalam melayani konten statis/dinamis dari worker frontend (`maki` dan `panda`) tanpa membebani backend.
+2. **Endpoint Backend API (`/api`)**: Menguji keandalan mekanisme **Rate Limiting** (`api_limit: 10r/s`) serta dampak perlindungan terhadap kluster worker backend (`nanami`, `todo`, `kirara`) dan basis data `yaga`.
+
+Skrip pengujian diotomatisasi dan dijalankan dari node penguji `fushiguro` melalui berkas `benchmark_soal20.sh`:
+
+```bash
+cat << 'EOF' > benchmark_soal20.sh
+#!/bin/sh
+apk update > /dev/null 2>&1
+apk add apache2-utils > /dev/null 2>&1
+
+# 1. Uji Beban Endpoint Frontend Web (Proxy Caching)
+ab -n 600 -c 30 -H "Host: jujutsu.k01.com" [http://10.64.1.4/](http://10.64.1.4/)
+sleep 2
+
+# 2. Uji Beban Endpoint Backend API (Rate Limiting)
+ab -n 600 -c 30 -H "Host: jujutsu.k01.com" [http://10.64.1.4/api](http://10.64.1.4/api)
+EOF
+
+chmod +x benchmark_soal20.sh
+./benchmark_soal20.sh
+
+```

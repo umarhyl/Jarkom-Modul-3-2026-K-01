@@ -37,6 +37,13 @@ Daftar entitas dan peran jaringan:
 | **ino, kusakabe** | Klien Divisi B (Short Lease) | Dinamis (Short Lease 30m) | `10.64.3.10` – `10.64.3.89` |
 | **miwa** | Klien Divisi B (Long Lease) | Dinamis (Long Lease 12h) | `10.64.3.100` – `10.64.3.199` |
 | **kugisaki** | Klien Divisi B (VIP) | DHCP Static / Fixed Address | `10.64.3.99/24` |
+| **maki** | Worker Frontend 1 | Statis | `10.64.4.3/24` |
+| **panda** | Worker Frontend 2 | Statis | `10.64.4.4/24` |
+| **nanami** | Worker API Utama 1 | Statis | `10.64.4.5/24` |
+| **todo** | Worker API Utama 2 | Statis | `10.64.4.6/24` |
+| **kirara** | Worker API Cadangan | Statis | `10.64.4.7/24` |
+| **yaga** | Database Master MariaDB | Statis | `10.64.4.11/24` |
+| **inumaki** | Database Slave MariaDB | Statis | `10.64.4.12/24` |
 
 ---
 

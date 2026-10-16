@@ -142,8 +142,6 @@ subnet 10.64.4.0 netmask 255.255.255.0 {
 
 Script konfigurasi DHCP server dijalankan dari `nodes/tengen/quest-2.sh`:
 
-```bash
-
 Pengujian dilakukan dengan memeriksa status service `isc-dhcp-server` di tengen:
 
 - Cek status service:
